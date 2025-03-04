@@ -1,22 +1,33 @@
+"""
+时间序列分析主入口脚本
+功能：
+1. 参数解析与实验配置：支持5种时间序列任务类型
+2. 设备初始化与随机种子设置：确保实验可复现性
+3. 任务分发机制：根据任务类型初始化对应实验模块
+4. 训练流程控制：包含模型保存和GPU内存管理
+"""
 import argparse
 import os
 import torch
 import torch.backends
-from exp.exp_long_term_forecasting import Exp_Long_Term_Forecast
-from exp.exp_imputation import Exp_Imputation
-from exp.exp_short_term_forecasting import Exp_Short_Term_Forecast
-from exp.exp_anomaly_detection import Exp_Anomaly_Detection
-from exp.exp_classification import Exp_Classification
+# 导入不同任务的实验类
+from exp.exp_long_term_forecasting import Exp_Long_Term_Forecast  # 长期预测任务
+from exp.exp_imputation import Exp_Imputation                     # 数据补全任务
+from exp.exp_short_term_forecasting import Exp_Short_Term_Forecast # 短期预测任务
+from exp.exp_anomaly_detection import Exp_Anomaly_Detection       # 异常检测任务
+from exp.exp_classification import Exp_Classification             # 分类任务
 from utils.print_args import print_args
 import random
 import numpy as np
 
 if __name__ == '__main__':
-    fix_seed = 2021
-    random.seed(fix_seed)
-    torch.manual_seed(fix_seed)
-    np.random.seed(fix_seed)
+    # 固定随机种子保证实验可复现
+    fix_seed = 2021  
+    random.seed(fix_seed)        # Python随机种子
+    torch.manual_seed(fix_seed)  # PyTorch随机种子
+    np.random.seed(fix_seed)     # Numpy随机种子
 
+    # 创建参数解析器
     parser = argparse.ArgumentParser(description='TimesNet')
 
     # basic config
@@ -97,49 +108,72 @@ if __name__ == '__main__':
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
     parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
 
-    # GPU
-    parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
-    parser.add_argument('--gpu', type=int, default=0, help='gpu')
-    parser.add_argument('--gpu_type', type=str, default='cuda', help='gpu type')  # cuda or mps
-    parser.add_argument('--use_multi_gpu', action='store_true', help='use multiple gpus', default=False)
-    parser.add_argument('--devices', type=str, default='0,1,2,3', help='device ids of multile gpus')
+    # GPU配置
+    parser.add_argument('--use_gpu', type=bool, default=True, 
+                        help='是否使用GPU，默认为True')
+    parser.add_argument('--gpu', type=int, default=0, 
+                        help='使用的GPU编号，默认为0')
+    parser.add_argument('--gpu_type', type=str, default='cuda', 
+                        help='GPU类型选项：[cuda, mps]，默认为cuda')
+    parser.add_argument('--use_multi_gpu', action='store_true', 
+                        help='是否使用多GPU并行训练，添加此参数表示启用', default=False)
+    parser.add_argument('--devices', type=str, default='0,1,2,3',
+                        help='多GPU使用的设备ID列表，用逗号分隔')
 
-    # de-stationary projector params
+    # 非平稳投影器参数
     parser.add_argument('--p_hidden_dims', type=int, nargs='+', default=[128, 128],
-                        help='hidden layer dimensions of projector (List)')
-    parser.add_argument('--p_hidden_layers', type=int, default=2, help='number of hidden layers in projector')
+                        help='投影器隐藏层维度列表，例如：[128, 128]表示两层128维')
+    parser.add_argument('--p_hidden_layers', type=int, default=2,
+                        help='投影器的隐藏层层数，默认为2层')
 
-    # metrics (dtw)
+    # 评估指标
     parser.add_argument('--use_dtw', type=bool, default=False,
-                        help='the controller of using dtw metric (dtw is time consuming, not suggested unless necessary)')
+                        help='是否使用DTW指标，默认为False（DTW计算耗时，非必要不建议开启）')
 
-    # Augmentation
-    parser.add_argument('--augmentation_ratio', type=int, default=0, help="How many times to augment")
-    parser.add_argument('--seed', type=int, default=2, help="Randomization seed")
-    parser.add_argument('--jitter', default=False, action="store_true", help="Jitter preset augmentation")
-    parser.add_argument('--scaling', default=False, action="store_true", help="Scaling preset augmentation")
+    # 数据增强配置
+    parser.add_argument('--augmentation_ratio', type=int, default=0, 
+                        help="数据增强倍数，0表示不增强")
+    parser.add_argument('--seed', type=int, default=2, 
+                        help="数据增强的随机种子，默认为2")
+    # 具体增强方法开关
+    parser.add_argument('--jitter', default=False, action="store_true", 
+                        help="启用抖动增强")
+    parser.add_argument('--scaling', default=False, action="store_true",
+                        help="启用缩放增强")
     parser.add_argument('--permutation', default=False, action="store_true",
-                        help="Equal Length Permutation preset augmentation")
+                        help="等长排列增强")
     parser.add_argument('--randompermutation', default=False, action="store_true",
-                        help="Random Length Permutation preset augmentation")
-    parser.add_argument('--magwarp', default=False, action="store_true", help="Magnitude warp preset augmentation")
-    parser.add_argument('--timewarp', default=False, action="store_true", help="Time warp preset augmentation")
-    parser.add_argument('--windowslice', default=False, action="store_true", help="Window slice preset augmentation")
-    parser.add_argument('--windowwarp', default=False, action="store_true", help="Window warp preset augmentation")
-    parser.add_argument('--rotation', default=False, action="store_true", help="Rotation preset augmentation")
-    parser.add_argument('--spawner', default=False, action="store_true", help="SPAWNER preset augmentation")
-    parser.add_argument('--dtwwarp', default=False, action="store_true", help="DTW warp preset augmentation")
-    parser.add_argument('--shapedtwwarp', default=False, action="store_true", help="Shape DTW warp preset augmentation")
-    parser.add_argument('--wdba', default=False, action="store_true", help="Weighted DBA preset augmentation")
+                        help="随机长度排列增强")
+    parser.add_argument('--magwarp', default=False, action="store_true",
+                        help="幅度弯曲增强")
+    parser.add_argument('--timewarp', default=False, action="store_true",
+                        help="时间弯曲增强")
+    parser.add_argument('--windowslice', default=False, action="store_true",
+                        help="窗口切片增强")
+    parser.add_argument('--windowwarp', default=False, action="store_true",
+                        help="窗口变形增强")
+    parser.add_argument('--rotation', default=False, action="store_true",
+                        help="旋转增强")
+    parser.add_argument('--spawner', default=False, action="store_true",
+                        help="生成器增强")
+    parser.add_argument('--dtwwarp', default=False, action="store_true",
+                        help="DTW弯曲增强")
+    parser.add_argument('--shapedtwwarp', default=False, action="store_true",
+                        help="形状DTW增强")
+    parser.add_argument('--wdba', default=False, action="store_true",
+                        help="加权DBA增强")
     parser.add_argument('--discdtw', default=False, action="store_true",
-                        help="Discrimitive DTW warp preset augmentation")
+                        help="判别式DTW增强")
     parser.add_argument('--discsdtw', default=False, action="store_true",
-                        help="Discrimitive shapeDTW warp preset augmentation")
-    parser.add_argument('--extra_tag', type=str, default="", help="Anything extra")
+                        help="判别式形状DTW增强")
+    parser.add_argument('--extra_tag', type=str, default="",
+                        help="额外标签，用于实验备注")
 
-    # TimeXer
-    parser.add_argument('--patch_len', type=int, default=16, help='patch length')
+    # TimeXer模型参数
+    parser.add_argument('--patch_len', type=int, default=16, 
+                        help='TimeXer模型的补丁长度，默认为16')
 
+    # 解析所有参数
     args = parser.parse_args()
     if torch.cuda.is_available() and args.use_gpu:
         args.device = torch.device('cuda:{}'.format(args.gpu))
@@ -160,56 +194,68 @@ if __name__ == '__main__':
     print('Args in experiment:')
     print_args(args)
 
+    # 任务分发逻辑
     if args.task_name == 'long_term_forecast':
-        Exp = Exp_Long_Term_Forecast
+        Exp = Exp_Long_Term_Forecast       # 长期预测实验
     elif args.task_name == 'short_term_forecast':
-        Exp = Exp_Short_Term_Forecast
+        Exp = Exp_Short_Term_Forecast      # 短期预测实验
     elif args.task_name == 'imputation':
-        Exp = Exp_Imputation
+        Exp = Exp_Imputation               # 数据补全实验
     elif args.task_name == 'anomaly_detection':
-        Exp = Exp_Anomaly_Detection
+        Exp = Exp_Anomaly_Detection        # 异常检测实验
     elif args.task_name == 'classification':
-        Exp = Exp_Classification
+        Exp = Exp_Classification           # 分类实验
     else:
-        Exp = Exp_Long_Term_Forecast
+        Exp = Exp_Long_Term_Forecast       # 默认使用长期预测
 
+    # 训练模式
     if args.is_training:
+        # 多实验循环（itr控制实验次数）
         for ii in range(args.itr):
-            # setting record of experiments
-            exp = Exp(args)  # set experiments
+            # 实验初始化
+            exp = Exp(args)  # 创建对应任务的实验对象
+            
+            # 生成实验设置名称（包含所有关键参数）
             setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_expand{}_dc{}_fc{}_eb{}_dt{}_{}_{}'.format(
-                args.task_name,
-                args.model_id,
-                args.model,
-                args.data,
-                args.features,
-                args.seq_len,
-                args.label_len,
-                args.pred_len,
-                args.d_model,
-                args.n_heads,
-                args.e_layers,
-                args.d_layers,
-                args.d_ff,
-                args.expand,
-                args.d_conv,
-                args.factor,
-                args.embed,
-                args.distil,
-                args.des, ii)
+                args.task_name,    # 任务类型
+                args.model_id,     # 模型ID
+                args.model,        # 模型名称
+                args.data,         # 数据集
+                args.features,     # 特征类型
+                args.seq_len,      # 输入序列长度
+                args.label_len,    # 标签长度
+                args.pred_len,     # 预测长度
+                args.d_model,      # 模型维度
+                args.n_heads,      # 注意力头数
+                args.e_layers,     # 编码器层数
+                args.d_layers,     # 解码器层数
+                args.d_ff,         # 前馈网络维度
+                args.expand,       # Mamba扩展因子
+                args.d_conv,       # Mamba卷积核尺寸
+                args.factor,       # 注意力因子
+                args.embed,        # 时间编码方式
+                args.distil,       # 是否使用蒸馏
+                args.des, ii)      # 实验描述和迭代次数
 
+            # 训练阶段
             print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
-            exp.train(setting)
+            exp.train(setting)     # 执行训练流程
 
+            # 测试阶段
             print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-            exp.test(setting)
+            exp.test(setting)      # 执行测试流程
+            
+            # GPU缓存清理
             if args.gpu_type == 'mps':
-                torch.backends.mps.empty_cache()
+                torch.backends.mps.empty_cache()  # MPS设备缓存清理
             elif args.gpu_type == 'cuda':
-                torch.cuda.empty_cache()
+                torch.cuda.empty_cache()          # CUDA设备缓存清理
+    
+    # 仅测试模式
     else:
-        exp = Exp(args)  # set experiments
+        exp = Exp(args)  # 初始化实验对象
         ii = 0
+        # 生成测试设置名称（格式与训练相同）
         setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_expand{}_dc{}_fc{}_eb{}_dt{}_{}_{}'.format(
             args.task_name,
             args.model_id,
@@ -231,9 +277,5 @@ if __name__ == '__main__':
             args.distil,
             args.des, ii)
 
-        print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-        exp.test(setting, test=1)
-        if args.gpu_type == 'mps':
-            torch.backends.mps.empty_cache()
-        elif args.gpu_type == 'cuda':
-            torch.cuda.empty_cache()
+        # 执行测试
+        print
