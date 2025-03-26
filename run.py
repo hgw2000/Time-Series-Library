@@ -277,5 +277,9 @@ if __name__ == '__main__':
             args.distil,
             args.des, ii)
 
-        # 执行测试
-        print
+        print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+        exp.test(setting, test=1)
+        if args.gpu_type == 'mps':
+            torch.backends.mps.empty_cache()
+        elif args.gpu_type == 'cuda':
+            torch.cuda.empty_cache()
