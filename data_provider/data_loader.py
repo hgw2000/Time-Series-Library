@@ -20,81 +20,144 @@ class Dataset_ETT_hour(Dataset):
     def __init__(self, args, root_path, flag='train', size=None,
                  features='S', data_path='ETTh1.csv',
                  target='OT', scale=True, timeenc=0, freq='h', seasonal_patterns=None):
-        # size [seq_len, label_len, pred_len]
+        """ETT数据集的小时级数据加载器
+        Args:
+            args: 配置参数
+            root_path: 数据集根目录
+            flag: 数据集类型 ['train', 'test', 'val']
+            size: 序列长度配置 [seq_len, label_len, pred_len]
+            features: 特征选择 ['S'单变量, 'M'多变量]
+            data_path: 数据文件名
+            target: 预测目标变量
+            scale: 是否进行标准化
+            timeenc: 时间编码方式
+            freq: 时间频率，'h'表示小时
+        """
         self.args = args
-        # info
+        
+        # 设置序列长度参数
         if size == None:
-            self.seq_len = 24 * 4 * 4
-            self.label_len = 24 * 4
-            self.pred_len = 24 * 4
+            # 默认设置
+            self.seq_len = 24 * 4 * 4    # 输入序列长度：96小时
+            self.label_len = 24 * 4      # 标签序列长度：48小时
+            self.pred_len = 24 * 4       # 预测序列长度：96小时
         else:
             self.seq_len = size[0]
             self.label_len = size[1]
             self.pred_len = size[2]
-        # init
+            
+        # 数据集类型映射
         assert flag in ['train', 'test', 'val']
         type_map = {'train': 0, 'val': 1, 'test': 2}
         self.set_type = type_map[flag]
 
-        self.features = features
-        self.target = target
-        self.scale = scale
-        self.timeenc = timeenc
-        self.freq = freq
+        # 保存配置参数
+        self.features = features    # 特征类型
+        self.target = target       # 预测目标
+        self.scale = scale         # 是否标准化
+        self.timeenc = timeenc     # 时间编码方式
+        self.freq = freq           # 时间频率
 
         self.root_path = root_path
         self.data_path = data_path
-        self.__read_data__()
+        self.__read_data__()       # 读取数据
 
     def __read_data__(self):
+        # 初始化标准化器用于数据预处理
         self.scaler = StandardScaler()
-        df_raw = pd.read_csv(os.path.join(self.root_path,
-                                          self.data_path))
+        # 读取原始CSV数据文件
+        df_raw = pd.read_csv(os.path.join(self.root_path, self.data_path))
 
-        border1s = [0, 12 * 30 * 24 - self.seq_len, 12 * 30 * 24 + 4 * 30 * 24 - self.seq_len]
-        border2s = [12 * 30 * 24, 12 * 30 * 24 + 4 * 30 * 24, 12 * 30 * 24 + 8 * 30 * 24]
-        border1 = border1s[self.set_type]
-        border2 = border2s[self.set_type]
+        # border1s 和 border2s 用于定义数据集的起始和结束位置
+        # 假设总数据长度为 12 * 30 * 24 + 8 * 30 * 24 = 14400 小时（20个月）
+        
+        # border1s: 每个数据集的起始位置
+        border1s = [
+            0,                                          # 训练集起点：从第0小时开始
+            12 * 30 * 24 - self.seq_len,               # 验证集起点：从第12个月开始，减去序列长度以确保有足够的历史数据
+            12 * 30 * 24 + 4 * 30 * 24 - self.seq_len  # 测试集起点：从第16个月开始，同样减去序列长度
+        ]
+        
+        # border2s: 每个数据集的结束位置
+        border2s = [
+            12 * 30 * 24,                    # 训练集终点：到第12个月结束（8640小时）
+            12 * 30 * 24 + 4 * 30 * 24,      # 验证集终点：到第16个月结束（11520小时）
+            12 * 30 * 24 + 8 * 30 * 24       # 测试集终点：到第20个月结束（14400小时）
+        ]
 
+        # 根据数据集类型（训练/验证/测试）选择对应的边界
+        # self.set_type 的值：训练集=0，验证集=1，测试集=2
+        border1 = border1s[self.set_type]  # 当前数据集的起始位置
+        border2 = border2s[self.set_type]  # 当前数据集的结束位置
+
+        # 示例：
+        # 如果 seq_len = 96，则：
+        # 训练集：border1 = 0,        border2 = 8640    (前12个月的数据)
+        # 验证集：border1 = 8544,     border2 = 11520   (中间4个月的数据，起点提前96小时)
+        # 测试集：border1 = 11424,    border2 = 14400   (最后4个月的数据，起点提前96小时)
+
+        # 特征选择：决定使用哪些列作为特征
         if self.features == 'M' or self.features == 'MS':
+            # 多变量模式：使用除时间列外的所有特征
             cols_data = df_raw.columns[1:]
             df_data = df_raw[cols_data]
         elif self.features == 'S':
+            # 单变量模式：只使用目标变量
             df_data = df_raw[[self.target]]
 
+        # 数据标准化处理
         if self.scale:
-            train_data = df_data[border1s[0]:border2s[0]]
+            # 注意：只使用训练集数据来拟合标准化器，避免数据泄露
+            train_data = df_data[border1s[0]:border2s[0]]  # 使用完整训练集数据进行拟合
             self.scaler.fit(train_data.values)
+            # 对所有数据进行标准化转换
             data = self.scaler.transform(df_data.values)
         else:
             data = df_data.values
 
+        # 提取时间特征
+        # 只取当前数据集范围内的时间戳
         df_stamp = df_raw[['date']][border1:border2]
         df_stamp['date'] = pd.to_datetime(df_stamp.date)
+        
         if self.timeenc == 0:
+            # 手动提取时间特征：月、日、周几、小时
             df_stamp['month'] = df_stamp.date.apply(lambda row: row.month, 1)
             df_stamp['day'] = df_stamp.date.apply(lambda row: row.day, 1)
             df_stamp['weekday'] = df_stamp.date.apply(lambda row: row.weekday(), 1)
             df_stamp['hour'] = df_stamp.date.apply(lambda row: row.hour, 1)
             data_stamp = df_stamp.drop(['date'], 1).values
         elif self.timeenc == 1:
+            # 使用特殊的时间特征编码方式
             data_stamp = time_features(pd.to_datetime(df_stamp['date'].values), freq=self.freq)
-            data_stamp = data_stamp.transpose(1, 0) 
+            data_stamp = data_stamp.transpose(1, 0)
 
+        # 准备最终的输入数据，只取当前数据集的范围
         self.data_x = data[border1:border2]
         self.data_y = data[border1:border2]
 
+        # 如果是训练集且需要数据增强，则进行数据增强
         if self.set_type == 0 and self.args.augmentation_ratio > 0:
             self.data_x, self.data_y, augmentation_tags = run_augmentation_single(self.data_x, self.data_y, self.args)
 
+        # 保存时间特征
         self.data_stamp = data_stamp
 
     def __getitem__(self, index):
+        """获取单个样本
+        返回：
+            seq_x: 输入序列
+            seq_y: 目标序列
+            seq_x_mark: 输入序列的时间特征
+            seq_y_mark: 目标序列的时间特征
+        """
+        # 计算序列的起止位置
         s_begin = index
         s_end = s_begin + self.seq_len
         r_begin = s_end - self.label_len
         r_end = r_begin + self.label_len + self.pred_len
 
+        # 获取数据切片
         seq_x = self.data_x[s_begin:s_end]
         seq_y = self.data_y[r_begin:r_end]
         seq_x_mark = self.data_stamp[s_begin:s_end]
@@ -103,9 +166,11 @@ class Dataset_ETT_hour(Dataset):
         return seq_x, seq_y, seq_x_mark, seq_y_mark
 
     def __len__(self):
+        """返回数据集长度"""
         return len(self.data_x) - self.seq_len - self.pred_len + 1
 
     def inverse_transform(self, data):
+        """将标准化的数据转换回原始尺度"""
         return self.scaler.inverse_transform(data)
 
 

@@ -141,15 +141,17 @@ if __name__ == '__main__':
     parser.add_argument('--patch_len', type=int, default=16, help='patch length')
 
     args = parser.parse_args()
-    if torch.cuda.is_available() and args.use_gpu:
+    
+    # 优先检查 MPS 设备
+    if args.gpu_type == 'mps' and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        args.device = torch.device("mps")
+        print('Using MPS device')
+    elif torch.cuda.is_available() and args.use_gpu and args.gpu_type == 'cuda':
         args.device = torch.device('cuda:{}'.format(args.gpu))
-        print('Using GPU')
+        print('Using CUDA device')
     else:
-        if hasattr(torch.backends, "mps"):
-            args.device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
-        else:
-            args.device = torch.device("cpu")
-        print('Using cpu or mps')
+        args.device = torch.device("cpu")
+        print('Using CPU device')
 
     if args.use_gpu and args.use_multi_gpu:
         args.devices = args.devices.replace(' ', '')
@@ -203,9 +205,14 @@ if __name__ == '__main__':
 
             print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
             exp.test(setting)
+            
+            # 安全地清理设备缓存
             if args.gpu_type == 'mps':
-                torch.backends.mps.empty_cache()
-            elif args.gpu_type == 'cuda':
+                import gc
+                gc.collect()
+                if hasattr(torch.mps, 'empty_cache'):
+                    torch.mps.empty_cache()
+            elif args.gpu_type == 'cuda' and torch.cuda.is_available():
                 torch.cuda.empty_cache()
     else:
         exp = Exp(args)  # set experiments
